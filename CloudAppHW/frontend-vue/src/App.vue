@@ -6,7 +6,26 @@ import ProfileCard from './components/ProfileCard.vue';
 import { ref, computed, onMounted, watch } from 'vue';
 import axios from 'axios';
 import { auth } from './firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged, onIdTokenChanged, signOut } from 'firebase/auth';
+
+// 初始化：若已登入，先帶一次 token
+(async () => {
+  const u = auth.currentUser;
+  if (u) {
+    const t = await u.getIdToken();
+    axios.defaults.headers.common['Authorization'] = `Bearer ${t}`;
+  }
+})();
+
+// 之後只要 token 變動，就更新 header
+onIdTokenChanged(auth, async (user) => {
+  if (user) {
+    const t = await user.getIdToken(/* forceRefresh */ true);
+    axios.defaults.headers.common['Authorization'] = `Bearer ${t}`;
+  } else {
+    delete axios.defaults.headers.common['Authorization'];
+  }
+});
 
 // 狀態
 const isAuthenticated = ref(false);
@@ -108,7 +127,7 @@ watch(userEmail, () => {
     <!-- Header -->
     <header class="bg-indigo-600 text-white p-2 rounded-lg shadow-lg mb-4 flex justify-between items-center">
       <h1 class="text-2xl font-bold flex items-center space-x-2 ">
-        <strong><span><a href="/" style="color:white">Trip Planner</a></span></strong>
+        <strong><span><a href="/" style="color:white">DragonFlyX</a></span></strong>
         <span
             v-if="isAuthenticated && isViewingSomeoneElse"
             class="text-xs font-normal bg-white/20 rounded px-2 py-0.5"
@@ -134,7 +153,7 @@ watch(userEmail, () => {
         <div class="lg:col-span-12 space-y-6">
           <!-- Info Card -->
           <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
-            <h2 class="text-2xl font-bold mb-4 text-gray-800">Trip Planner</h2>
+            <h2 class="text-2xl font-bold mb-4 text-gray-800">DragonFlyX</h2>
             <div class="space-y-1 text-gray-700">
               <p><strong>Team name:</strong> <span class="text-indigo-600">Kenting 🏖️</span></p>
               <p><strong>Team member:</strong> Po-Chun Lu</p>
@@ -152,8 +171,9 @@ watch(userEmail, () => {
         <!-- 左側 -->
         <div class="lg:col-span-5 space-y-6">
           <!-- Info card -->
-          <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
-            <h2 class="text-2xl font-bold mb-4 text-gray-800 text-center">Trip Planner</h2>
+          <div class="bg-white p-4 rounded-xl shadow-lg border border-gray-200">
+            <h2 class="text-2xl font-bold mb-1 text-gray-800 text-center">🐲 DragonFlyX 🚁</h2>
+            <div class="space-y-1 text-gray-700"><p><strong>The Trip Planner.</strong></p></div><br>
             <div class="space-y-1 text-gray-700 text-center md:text-left">
               <p><strong>Team name:</strong> <span class="text-indigo-600">Kenting 🏖️</span></p>
               <p><strong>Team member:</strong> Po-Chun Lu</p>

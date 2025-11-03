@@ -1,4 +1,4 @@
-//server.js
+// server.js
 require('dotenv').config(); // Load .env file
 
 const multer = require('multer');
@@ -17,7 +17,7 @@ app.use(cors()); // 先全開，之後要上線再縮
 app.use(express.json());
 
 /* ========================
-   GCS setup (avatar upload)
+   GCS setup (avatar upload) + Firebase Admin
 ======================== */
 let storage;
 if (process.env.GCP_SERVICE_ACCOUNT_JSON) {
@@ -30,7 +30,7 @@ if (process.env.GCP_SERVICE_ACCOUNT_JSON) {
         },
     });
 
-    // 🔥 Firestore 也用同一組 creds
+    // 🔥 Firestore / Auth 也用同一組 creds
     if (!admin.apps.length) {
         admin.initializeApp({
             credential: admin.credential.cert({
@@ -56,49 +56,24 @@ const BUCKET_NAME =
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// 上傳頭貼
-app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
+/* ========================
+   Auth Middleware（一定要在用到之前宣告）
+======================== */
+async function verifyFirebaseToken(req, res, next) {
     try {
-        const email = req.body.email;
-        const file = req.file;
-
-        if (!email) {
-            return res.status(400).send({ message: 'Missing email.' });
+        const hdr = req.headers.authorization || '';
+        const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
+        if (!token) {
+            return res.status(401).send({ message: 'Missing Authorization Bearer token' });
         }
-        if (!file) {
-            return res.status(400).send({ message: 'Missing avatar file.' });
-        }
-
-        // 只收 JPEG (前端我們會轉成 jpeg 上傳)
-        if (
-            file.mimetype !== 'image/jpeg' &&
-            file.mimetype !== 'image/jpg'
-        ) {
-            return res.status(400).send({ message: 'Only JPEG allowed.' });
-        }
-
-        const destFileName = `avatar/${email}.jpg`;
-
-        const bucket = storage.bucket(BUCKET_NAME);
-        const gcFile = bucket.file(destFileName);
-
-        await gcFile.save(file.buffer, {
-            metadata: {
-                contentType: 'image/jpeg',
-                cacheControl: 'public, max-age=3600',
-            },
-            resumable: false,
-        });
-
-        // bucket 如果本身就是 public 可以不用，但保險一次
-        await gcFile.makePublic().catch(() => {});
-
-        return res.status(200).send({ message: 'Avatar uploaded.' });
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.user = decoded; // 內含 email, uid, ...
+        return next();
     } catch (err) {
-        console.error('Upload avatar error:', err);
-        return res.status(500).send({ message: 'Failed to upload avatar.' });
+        console.error('Auth error:', err);
+        return res.status(401).send({ message: 'Invalid or expired token' });
     }
-});
+}
 
 /* ========================
    MySQL helpers
@@ -108,7 +83,7 @@ function formatDate(date) {
     if (!date) return null;
 
     const d = new Date(date);
-    d.setDate(d.getDate()); // 原本就這樣寫的：+0天 (你之前+1天，現在保留你現有邏輯)
+    d.setDate(d.getDate()); // 保留你原邏輯
 
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -131,7 +106,7 @@ const pool = mysql.createPool({
    Core APIs (register, trips, etc)
 ======================== */
 
-// 1. 註冊 / 登入
+// 1. 註冊 / 登入（保留：給非 Firebase 流程；目前前端不再使用）
 app.post('/api/register', async (req, res) => {
     const { email, name } = req.body;
     if (!email || !name) {
@@ -175,10 +150,9 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// 2. 建立行程
-app.post('/api/itineraries', async (req, res) => {
+// 2. 建立行程（改為需登入，email 從 token 取，不再接受 traveller_email）
+app.post('/api/itineraries', verifyFirebaseToken, async (req, res) => {
     const {
-        traveller_email,
         title,
         destination,
         start_date,
@@ -192,19 +166,19 @@ app.post('/api/itineraries', async (req, res) => {
         !destination ||
         !start_date ||
         !end_date ||
-        short_description.length > 80 ||
-        !traveller_email
+        (short_description && short_description.length > 80)
     ) {
         return res.status(400).send({
             message:
-                'Missing required fields, invalid input, or short description too long. (Requires traveller_email and end_date)',
+                'Missing required fields or short description too long.',
         });
     }
 
     try {
+        const email = req.user?.email;
         const [traveller] = await pool.execute(
             'SELECT id FROM travellers WHERE email = ?',
-            [traveller_email],
+            [email],
         );
         if (traveller.length === 0) {
             return res
@@ -221,8 +195,8 @@ app.post('/api/itineraries', async (req, res) => {
                 destination,
                 start_date,
                 end_date,
-                short_description,
-                detail_description,
+                short_description || '',
+                detail_description || '',
             ],
         );
         res
@@ -236,17 +210,17 @@ app.post('/api/itineraries', async (req, res) => {
     }
 });
 
-// 3b. 取得行程列表
+// 3b. 取得行程列表（公開：維持原本回全部、前端自行過濾）
 app.get('/api/itineraries/by-email/:email', async (req, res) => {
-    const { email } = req.params;
+    const { email } = req.params; // 目前未在 SQL 用到，保留你的行為
     try {
         const [rows] = await pool.execute(
             `
-      SELECT i.id, i.title, i.start_date, i.end_date, i.short_description, t.email AS traveller_email
-      FROM itineraries i
-      JOIN travellers t ON i.traveller_id = t.id
-      ORDER BY i.start_date DESC
-    `,
+                SELECT i.id, i.title, i.start_date, i.end_date, i.short_description, t.email AS traveller_email
+                FROM itineraries i
+                         JOIN travellers t ON i.traveller_id = t.id
+                ORDER BY i.start_date DESC
+            `,
             [email],
         );
 
@@ -265,17 +239,17 @@ app.get('/api/itineraries/by-email/:email', async (req, res) => {
     }
 });
 
-// 4. 行程詳細
+// 4. 行程詳細（公開）
 app.get('/api/itineraries/detail/:id', async (req, res) => {
     const { id } = req.params;
     try {
         const [rows] = await pool.execute(
             `
-      SELECT i.*, t.email AS traveller_email
-      FROM itineraries i
-      JOIN travellers t ON i.traveller_id = t.id
-      WHERE i.id = ?
-    `,
+                SELECT i.*, t.email AS traveller_email
+                FROM itineraries i
+                         JOIN travellers t ON i.traveller_id = t.id
+                WHERE i.id = ?
+            `,
             [id],
         );
 
@@ -296,8 +270,8 @@ app.get('/api/itineraries/detail/:id', async (req, res) => {
     }
 });
 
-// 5. 編輯
-app.put('/api/itineraries/:id', async (req, res) => {
+// 5. 編輯（需登入 + 擁有者；不再從 body 收 traveller_email）
+app.put('/api/itineraries/:id', verifyFirebaseToken, async (req, res) => {
     const { id } = req.params;
     const {
         title,
@@ -306,7 +280,6 @@ app.put('/api/itineraries/:id', async (req, res) => {
         end_date,
         short_description,
         detail_description,
-        traveller_email,
     } = req.body;
 
     if (
@@ -314,24 +287,25 @@ app.put('/api/itineraries/:id', async (req, res) => {
         !destination ||
         !start_date ||
         !end_date ||
-        short_description.length > 80 ||
-        !traveller_email
+        (short_description && short_description.length > 80)
     ) {
         return res.status(400).send({
-            message: 'Missing required fields or traveller_email.',
+            message: 'Missing required fields or invalid short description.',
         });
     }
 
     try {
+        const email = req.user?.email;
+
         // 授權檢查
         const [rows] = await pool.execute(
             `
-      SELECT i.id
-      FROM itineraries i
-      JOIN travellers t ON i.traveller_id = t.id
-      WHERE i.id = ? AND t.email = ?
-    `,
-            [id, traveller_email],
+                SELECT i.id
+                FROM itineraries i
+                         JOIN travellers t ON i.traveller_id = t.id
+                WHERE i.id = ? AND t.email = ?
+            `,
+            [id, email],
         );
 
         if (rows.length === 0) {
@@ -342,22 +316,22 @@ app.put('/api/itineraries/:id', async (req, res) => {
 
         const [result] = await pool.execute(
             `
-      UPDATE itineraries SET
-        title = ?,
-        destination = ?,
-        start_date = ?,
-        end_date = ?,
-        short_description = ?,
-        detail_description = ?
-      WHERE id = ?
-    `,
+                UPDATE itineraries SET
+                                       title = ?,
+                                       destination = ?,
+                                       start_date = ?,
+                                       end_date = ?,
+                                       short_description = ?,
+                                       detail_description = ?
+                WHERE id = ?
+            `,
             [
                 title,
                 destination,
                 start_date,
                 end_date,
-                short_description,
-                detail_description,
+                short_description || '',
+                detail_description || '',
                 id,
             ],
         );
@@ -377,27 +351,22 @@ app.put('/api/itineraries/:id', async (req, res) => {
     }
 });
 
-// 6. 刪除
-app.delete('/api/itineraries/:id', async (req, res) => {
+// 6. 刪除（需登入 + 擁有者；不再從 body 收 traveller_email）
+app.delete('/api/itineraries/:id', verifyFirebaseToken, async (req, res) => {
     const { id } = req.params;
-    const { traveller_email } = req.body;
-
-    if (!traveller_email) {
-        return res.status(400).send({
-            message: 'Missing traveller_email for authorization.',
-        });
-    }
 
     try {
+        const email = req.user?.email;
+
         // 授權檢查
         const [rows] = await pool.execute(
             `
-      SELECT i.id
-      FROM itineraries i
-      JOIN travellers t ON i.traveller_id = t.id
-      WHERE i.id = ? AND t.email = ?
-    `,
-            [id, traveller_email],
+                SELECT i.id
+                FROM itineraries i
+                         JOIN travellers t ON i.traveller_id = t.id
+                WHERE i.id = ? AND t.email = ?
+            `,
+            [id, email],
         );
 
         if (rows.length === 0) {
@@ -432,17 +401,17 @@ app.delete('/api/itineraries/:id', async (req, res) => {
 
 /**
  * Toggle like for this itinerary by this user.
- * Body: { userEmail: "a@b.com" }
+ * 需登入；使用 token email
  */
-app.post('/api/itineraries/:id/like/toggle', async (req, res) => {
+app.post('/api/itineraries/:id/like/toggle', verifyFirebaseToken, async (req, res) => {
     try {
         const itineraryId = req.params.id;
-        const userEmail = req.body.userEmail;
+        const userEmail = req.user?.email;
 
         if (!userEmail) {
             return res
                 .status(400)
-                .send({ message: 'Missing userEmail in body.' });
+                .send({ message: 'Missing user email in token.' });
         }
 
         // doc path: likes/{itineraryId}/userLikes/{userEmail}
@@ -462,7 +431,7 @@ app.post('/api/itineraries/:id/like/toggle', async (req, res) => {
             // not liked -> add like
             await likeDocRef.set({
                 email: userEmail,
-                liked_at: Date.now(), // 簡單 timestamp，用 ms 整數，不用 serverTimestamp
+                liked_at: Date.now(), // ms timestamp
             });
             return res.send({ liked: true });
         }
@@ -473,7 +442,7 @@ app.post('/api/itineraries/:id/like/toggle', async (req, res) => {
 });
 
 /**
- * Get like count for itinerary
+ * Get like count for itinerary（公開讀）
  */
 app.get('/api/itineraries/:id/like/count', async (req, res) => {
     try {
@@ -494,7 +463,7 @@ app.get('/api/itineraries/:id/like/count', async (req, res) => {
 });
 
 /**
- * Get who liked (for popup)
+ * Get who liked (for popup)（公開讀）
  */
 app.get('/api/itineraries/:id/like/list', async (req, res) => {
     try {
@@ -520,26 +489,16 @@ app.get('/api/itineraries/:id/like/list', async (req, res) => {
 
 /* ========================
    NEW: Comments API (Firestore)
-   collection path:
-   comments/{itineraryId}/items/{autoId}
-
-   each comment doc:
-   {
-     email: string,
-     text: string,
-     created_at: number (Date.now())
-   }
 ======================== */
 
 /**
- * 取得某個行程的所有留言 (照 created_at 由新到舊或舊到新，你決定)
+ * 取得某個行程的所有留言（公開讀）
  * GET /api/itineraries/:id/comments
  */
 app.get('/api/itineraries/:id/comments', async (req, res) => {
     try {
         const itineraryId = req.params.id;
 
-        // comments/{itineraryId}/items/*
         const qs = await db
             .collection('comments')
             .doc(itineraryId)
@@ -560,35 +519,31 @@ app.get('/api/itineraries/:id/comments', async (req, res) => {
 });
 
 /**
- * 新增留言
+ * 新增留言（需登入；email 從 token）
  * POST /api/itineraries/:id/comments
- * body: { userEmail: string, text: string }
+ * body: { text: string }
  */
-app.post('/api/itineraries/:id/comments', async (req, res) => {
+app.post('/api/itineraries/:id/comments', verifyFirebaseToken, async (req, res) => {
     try {
         const itineraryId = req.params.id;
-        const { userEmail, text } = req.body;
+        const email = req.user?.email;
+        const text = (req.body?.text || '').toString().trim();
 
-        if (!userEmail || !text || !text.trim()) {
+        if (!email || !text) {
             return res.status(400).send({ message: 'Missing userEmail or text' });
         }
 
-        // push comment
+        const payload = { email, text, created_at: Date.now() };
         const newDocRef = await db
             .collection('comments')
             .doc(itineraryId)
             .collection('items')
-            .add({
-                email: userEmail,
-                text: text.trim(),
-                created_at: Date.now()
-            });
+            .add(payload);
 
+        // 回傳與儲存一致的 created_at（避免兩次 Date.now()）
         return res.status(201).send({
             id: newDocRef.id,
-            email: userEmail,
-            text: text.trim(),
-            created_at: Date.now()
+            ...payload
         });
     } catch (err) {
         console.error('add comment error:', err);
@@ -597,19 +552,14 @@ app.post('/api/itineraries/:id/comments', async (req, res) => {
 });
 
 /**
- * 刪除自己的留言
+ * 刪除自己的留言（需登入；email 從 token）
  * DELETE /api/itineraries/:id/comments/:commentId
- * body: { userEmail: string }
  */
-app.delete('/api/itineraries/:id/comments/:commentId', async (req, res) => {
+app.delete('/api/itineraries/:id/comments/:commentId', verifyFirebaseToken, async (req, res) => {
     try {
         const itineraryId = req.params.id;
         const commentId = req.params.commentId;
-        const { userEmail } = req.body;
-
-        if (!userEmail) {
-            return res.status(400).send({ message: 'Missing userEmail' });
-        }
+        const email = req.user?.email;
 
         const commentRef = db
             .collection('comments')
@@ -623,7 +573,7 @@ app.delete('/api/itineraries/:id/comments/:commentId', async (req, res) => {
         }
 
         const data = snap.data();
-        if (data.email !== userEmail) {
+        if (data.email !== email) {
             return res.status(403).send({ message: 'Not allowed to delete this comment' });
         }
 
@@ -635,6 +585,73 @@ app.delete('/api/itineraries/:id/comments/:commentId', async (req, res) => {
     }
 });
 
+/* ========================
+   Travellers Ensure（需登入；第一次登入自動建）
+======================== */
+app.post('/api/travellers/ensure', verifyFirebaseToken, async (req, res) => {
+    const email = req.user?.email;
+    const name = (req.body?.name || 'Anonymous').toString().slice(0, 100);
+    if (!email) return res.status(400).send({ message: 'Missing email in token' });
+
+    try {
+        const [rows] = await pool.execute('SELECT id FROM travellers WHERE email = ?', [email]);
+        if (rows.length > 0) return res.send({ message: 'Exists', email });
+
+        const [result] = await pool.execute(
+            'INSERT INTO travellers (email, name) VALUES (?, ?)', [email, name]
+        );
+        return res.status(201).send({ id: result.insertId, email, name, message: 'Created' });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).send({ message: 'Server error ensuring traveller' });
+    }
+});
+
+/* ========================
+   Avatar 上傳（需登入；用 token 的 email 當檔名）
+======================== */
+app.post('/api/upload-avatar', verifyFirebaseToken, upload.single('avatar'), async (req, res) => {
+    try {
+        const email = req.user?.email; // 改用 token
+        const file = req.file;
+
+        if (!email) {
+            return res.status(400).send({ message: 'Missing user email in token.' });
+        }
+        if (!file) {
+            return res.status(400).send({ message: 'Missing avatar file.' });
+        }
+
+        // 只收 JPEG（前端我們會轉成 jpeg 上傳）
+        if (
+            file.mimetype !== 'image/jpeg' &&
+            file.mimetype !== 'image/jpg'
+        ) {
+            return res.status(400).send({ message: 'Only JPEG allowed.' });
+        }
+
+        const destFileName = `avatar/${email}.jpg`;
+
+        const bucket = storage.bucket(BUCKET_NAME);
+        const gcFile = bucket.file(destFileName);
+
+        await gcFile.save(file.buffer, {
+            metadata: {
+                contentType: 'image/jpeg',
+                cacheControl: 'public, max-age=3600',
+            },
+            resumable: false,
+        });
+
+        // bucket 如果本身就是 public 可以不用，但保險一次
+        await gcFile.makePublic().catch(() => {});
+
+        return res.status(200).send({ message: 'Avatar uploaded.' });
+    } catch (err) {
+        console.error('Upload avatar error:', err);
+        return res.status(500).send({ message: 'Failed to upload avatar.' });
+    }
+});
 
 /* ========================
    start server

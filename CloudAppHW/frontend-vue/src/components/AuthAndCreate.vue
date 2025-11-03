@@ -193,11 +193,11 @@ const createItinerary = async () => {
       <form @submit.prevent="createItinerary" class="space-y-4">
         <div class="flex flex-col">
           <label for="createTitle" class="text-sm font-medium text-gray-700">Title:</label>
-          <input type="text" id="createTitle" v-model="createTitle" required class="mt-1 p-2 border border-gray-300 rounded-md">
+          <input type="text" id="createTitle" v-model="createTitle" required class="mt-1 p-2 border border-gray-300 rounded-md" placeholder="Family Trip? Honeymoon?">
         </div>
         <div class="flex flex-col">
           <label for="createDestination" class="text-sm font-medium text-gray-700">Destination:</label>
-          <input type="text" id="createDestination" v-model="createDestination" required class="mt-1 p-2 border border-gray-300 rounded-md">
+          <input type="text" id="createDestination" v-model="createDestination" required placeholder="Location?" class="mt-1 p-2 border border-gray-300 rounded-md">
         </div>
         <div class="flex flex-col">
           <label for="createStartDate" class="text-sm font-medium text-gray-700">Starting Date:</label>
@@ -209,19 +209,22 @@ const createItinerary = async () => {
         </div>
         <div class="flex flex-col">
           <label for="createShortDesc" class="text-sm font-medium text-gray-700">Short Description:</label>
-          <input type="text" id="createShortDesc" v-model="createShortDesc" maxlength="80" required class="mt-1 p-2 border border-gray-300 rounded-md">
+          <input type="text" id="createShortDesc" v-model="createShortDesc" maxlength="80" required class="mt-1 p-2 border border-gray-300 rounded-md" placeholder="With Who? Note?">
         </div>
         <div class="flex flex-col">
           <label for="createDetailDesc" class="text-sm font-medium text-gray-700">Long Description:</label>
-          <textarea id="createDetailDesc" v-model="createDetailDesc" rows="3" class="mt-1 p-2 border border-gray-300 rounded-md"></textarea>
+          <textarea id="createDetailDesc" v-model="createDetailDesc" rows="3" class="mt-1 p-2 border border-gray-300 rounded-md" placeholder="Transportation Plan? Must-eat? Must-buy? Note?"></textarea>
         </div>
 
         <button
             class="w-full py-2 px-4 rounded-md text-white bg-green-600 hover:bg-green-700 transition"
             type="submit"
-        >Create
+        >🌏 Create 🐲
         </button>
       </form>
+      <p class="text-sm font-medium text-gray-700">
+        With Creating this trip, everyone on DragonFlyX can see it.
+      </p>
       <p :class="{'text-green-600': createMessage.includes('Successfully'), 'text-red-600': !createMessage.includes('Successfully')}" class="mt-3 text-sm font-medium">
         {{ createMessage }}
       </p>
