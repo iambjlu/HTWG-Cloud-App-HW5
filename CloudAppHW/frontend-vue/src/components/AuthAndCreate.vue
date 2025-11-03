@@ -1,4 +1,3 @@
-<!-- frontend-vue/src/components/AuthAndCreate.vue -->
 <script setup>
 import { ref } from 'vue';
 import axios from 'axios';
@@ -88,6 +87,20 @@ const createMessage = ref('');
 const createItinerary = async () => {
   createMessage.value = '';
 
+  // <-- 1. ADDED VALIDATION BLOCK -->
+  // The backend requires these, so we check them *before* sending.
+  if (
+      !createTitle.value ||
+      !createDestination.value ||
+      !createStartDate.value ||
+      !createEndDate.value ||
+      !createShortDesc.value // HTML 'required' is good, but JS check is safer
+  ) {
+    createMessage.value = 'Heads up: All fields are required.';
+    return; // Stop here
+  }
+  // <-- END OF NEW BLOCK -->
+
   if (createShortDesc.value.length > 80) {
     createMessage.value = 'Short Description should not longer than 80 letters.';
     return;
@@ -99,7 +112,8 @@ const createItinerary = async () => {
   }
 
   try {
-    await axios.post(`${API_BASE_URL}/api/itineraries`, {
+    // This part is the same as before
+    const response = await axios.post(`${API_BASE_URL}/api/itineraries`, {
       // 後端會從 token 取 email，不再需要 traveller_email 放 body
       title: createTitle.value,
       destination: createDestination.value,
@@ -111,20 +125,34 @@ const createItinerary = async () => {
 
     createMessage.value = `Trip "${createTitle.value}" Created Successfully！`;
 
+    // Reset form
     createTitle.value = createDestination.value = createStartDate.value = createEndDate.value = createShortDesc.value = createDetailDesc.value = '';
 
     emit('itinerary-updated');
 
+    // Call the AI suggestion alert
+    if (response.data && response.data.suggestion) {
+      setTimeout(() => {
+        alert(response.data.suggestion);
+      }, 100);
+    }
+
   } catch (error) {
     console.error('Error creating trip: ', error);
-    createMessage.value = 'Error creating trip.';
+
+    // <-- 2. IMPROVED ERROR MESSAGE -->
+    // Give a clearer error message if the server (400) sends one
+    if (error.response && error.response.data && error.response.data.message) {
+      createMessage.value = `Error: ${error.response.data.message}`;
+    } else {
+      createMessage.value = 'Error creating trip. Check console.';
+    }
   }
 };
 </script>
 
 <template>
   <div class="space-y-6">
-    <!-- 註冊/登入 (未認證時顯示) -->
     <div v-if="!isAuthenticated" class="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
       <h2 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">Register or Login</h2>
       <form @submit.prevent class="space-y-4">
@@ -186,7 +214,6 @@ const createItinerary = async () => {
       </p>
     </div>
 
-    <!-- 建立行程表單 (已認證時顯示) -->
     <div v-else class="bg-white p-6 rounded-xl shadow-lg border border-gray-200">
       <h2 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">Create new trip</h2>
 
