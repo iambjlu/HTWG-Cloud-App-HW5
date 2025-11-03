@@ -8,6 +8,9 @@ const mysql = require('mysql2/promise');
 const cors = require('cors');
 const admin = require('firebase-admin'); // <- NEW
 
+// <-- 1. NEW IMPORT (AI Studio SDK) -->
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
 const app = express();
 
 /* ========================
@@ -51,6 +54,23 @@ if (process.env.GCP_SERVICE_ACCOUNT_JSON) {
 // Firestore DB handle
 const db = admin.firestore();
 
+// <-- 1. NEW: Initialize Gemini (AI Studio) -->
+let generativeModel;
+if (process.env.GEMINI_API_KEY) {
+    try {
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        generativeModel = genAI.getGenerativeModel({
+            model: 'gemini-2.5-flash', // Use AI Studio model name
+        });
+        console.log('Gemini (AI Studio) initialized successfully.');
+    } catch (e) {
+        console.error('Failed to initialize AI Studio Gemini API', e);
+    }
+} else {
+    console.warn('GEMINI_API_KEY missing in .env. AI features will be disabled.');
+}
+// <-- END NEW 1 -->
+
 const BUCKET_NAME =
     process.env.GCP_BUCKET_NAME || 'htwg-cloudapp-hw.firebasestorage.app';
 
@@ -60,6 +80,7 @@ const upload = multer({ storage: multer.memoryStorage() });
    Auth Middleware（一定要在用到之前宣告）
 ======================== */
 async function verifyFirebaseToken(req, res, next) {
+    // ... (no change) ...
     try {
         const hdr = req.headers.authorization || '';
         const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
@@ -78,7 +99,7 @@ async function verifyFirebaseToken(req, res, next) {
 /* ========================
    MySQL helpers
 ======================== */
-
+// ... (formatDate function, no change) ...
 function formatDate(date) {
     if (!date) return null;
 
@@ -92,6 +113,7 @@ function formatDate(date) {
     return `${year}/${month}/${day}`;
 }
 
+// ... (pool create, no change) ...
 const pool = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -102,11 +124,68 @@ const pool = mysql.createPool({
     queueLimit: 0,
 });
 
+
+// <-- 2. NEW HELPER FUNCTION (Gemini) -->
+/**
+ * Gets a travel suggestion from the Gemini API (AI Studio).
+ * Returns null if the AI is not configured or fails.
+ */
+async function getGeminiSuggestion(itineraryData) {
+    if (!generativeModel) {
+        console.log('Gemini skipped (not initialized).');
+        return null;
+    }
+
+    const {
+        destination,
+        start_date,
+        end_date,
+        short_description,
+        detail_description,
+    } = itineraryData;
+
+    // 這是你提供的 Prompt
+    const systemPrompt = `You are a concise travel assistant. Write ONE English comment under 180 words for a trip.
+
+Trip:
+- Destination: ${destination}
+- Dates: ${start_date} to ${end_date}
+- ${short_description ? `Description: ${short_description}` : ''}
+- ${detail_description ? `Details: ${detail_description}` : ''}
+
+Write in friendly tone with short sections:
+1) Must-see highlights (3–5 bullets)
+2) Must-try food (2–4 bullets)
+3) Seasonal tips (2–4 bullets, tailored to the season)
+4) Packing suggestions (2–4 bullets)
+5) Local customs to know (2–4 bullets)
+Avoid emojis, no marketing fluff, no links, no duplication.`;
+
+    try {
+        console.log('Sending request to Gemini (AI Studio)...');
+
+        // AI Studio SDK call
+        const result = await generativeModel.generateContent(systemPrompt);
+        const response = await result.response;
+        const text = response.text(); // Get text directly
+
+        console.log('Gemini suggestion received.');
+        return text.trim();
+
+    } catch (err) {
+        // 如果 AI 炸了，不要卡住主流程
+        console.error('Gemini API (AI Studio) error:', err);
+        return null; // Fail gracefully
+    }
+}
+// <-- END NEW 2 -->
+
+
 /* ========================
    Core APIs (register, trips, etc)
 ======================== */
 
-// 1. 註冊 / 登入（保留：給非 Firebase 流程；目前前端不再使用）
+// 1. 註冊 / 登入 ... (no change) ...
 app.post('/api/register', async (req, res) => {
     const { email, name } = req.body;
     if (!email || !name) {
@@ -150,7 +229,9 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
+
 // 2. 建立行程（改為需登入，email 從 token 取，不再接受 traveller_email）
+// <-- 3. MODIFIED ROUTE -->
 app.post('/api/itineraries', verifyFirebaseToken, async (req, res) => {
     const {
         title,
@@ -199,9 +280,26 @@ app.post('/api/itineraries', verifyFirebaseToken, async (req, res) => {
                 detail_description || '',
             ],
         );
+
+        // ===== NEW: Call Gemini API (Non-blocking) =====
+        let suggestion = null;
+        try {
+            // 把 req.body 丟進去 (包含 title, destination, dates, etc.)
+            suggestion = await getGeminiSuggestion(req.body);
+        } catch (aiError) {
+            console.error('AI suggestion failed, but itinerary was created:', aiError);
+            // suggestion 保持 null 沒關係
+        }
+        // ===============================================
+
         res
             .status(201)
-            .send({ id: result.insertId, message: 'Itinerary created successfully.' });
+            .send({
+                id: result.insertId,
+                message: 'Itinerary created successfully.',
+                suggestion: suggestion, // <-- 3. NEW: 把建議加到 response
+            });
+
     } catch (error) {
         console.error(error);
         res
@@ -209,8 +307,10 @@ app.post('/api/itineraries', verifyFirebaseToken, async (req, res) => {
             .send({ message: 'Server error during itinerary creation.' });
     }
 });
+// <-- END NEW 3 -->
 
-// 3b. 取得行程列表（公開：維持原本回全部、前端自行過濾）
+
+// 3b. 取得行程列表 ... (no change) ...
 app.get('/api/itineraries/by-email/:email', async (req, res) => {
     const { email } = req.params; // 目前未在 SQL 用到，保留你的行為
     try {
@@ -239,7 +339,7 @@ app.get('/api/itineraries/by-email/:email', async (req, res) => {
     }
 });
 
-// 4. 行程詳細（公開）
+// 4. 行程詳細 ... (no change) ...
 app.get('/api/itineraries/detail/:id', async (req, res) => {
     const { id } = req.params;
     try {
@@ -270,7 +370,7 @@ app.get('/api/itineraries/detail/:id', async (req, res) => {
     }
 });
 
-// 5. 編輯（需登入 + 擁有者；不再從 body 收 traveller_email）
+// 5. 編輯 ... (no change) ...
 app.put('/api/itineraries/:id', verifyFirebaseToken, async (req, res) => {
     const { id } = req.params;
     const {
@@ -317,12 +417,12 @@ app.put('/api/itineraries/:id', verifyFirebaseToken, async (req, res) => {
         const [result] = await pool.execute(
             `
                 UPDATE itineraries SET
-                                       title = ?,
-                                       destination = ?,
-                                       start_date = ?,
-                                       end_date = ?,
-                                       short_description = ?,
-                                       detail_description = ?
+                                            title = ?,
+                                            destination = ?,
+                                            start_date = ?,
+                                            end_date = ?,
+                                            short_description = ?,
+                                            detail_description = ?
                 WHERE id = ?
             `,
             [
@@ -351,7 +451,7 @@ app.put('/api/itineraries/:id', verifyFirebaseToken, async (req, res) => {
     }
 });
 
-// 6. 刪除（需登入 + 擁有者；不再從 body 收 traveller_email）
+// 6. 刪除 ... (no change) ...
 app.delete('/api/itineraries/:id', verifyFirebaseToken, async (req, res) => {
     const { id } = req.params;
 
@@ -398,11 +498,7 @@ app.delete('/api/itineraries/:id', verifyFirebaseToken, async (req, res) => {
 /* ========================
    NEW: Likes API (Firestore)
 ======================== */
-
-/**
- * Toggle like for this itinerary by this user.
- * 需登入；使用 token email
- */
+// ... (Likes API functions, no change) ...
 app.post('/api/itineraries/:id/like/toggle', verifyFirebaseToken, async (req, res) => {
     try {
         const itineraryId = req.params.id;
@@ -440,10 +536,6 @@ app.post('/api/itineraries/:id/like/toggle', verifyFirebaseToken, async (req, re
         return res.status(500).send({ message: 'Like failed' });
     }
 });
-
-/**
- * Get like count for itinerary（公開讀）
- */
 app.get('/api/itineraries/:id/like/count', async (req, res) => {
     try {
         const itineraryId = req.params.id;
@@ -461,10 +553,6 @@ app.get('/api/itineraries/:id/like/count', async (req, res) => {
         return res.status(500).send({ message: 'Failed to get like count' });
     }
 });
-
-/**
- * Get who liked (for popup)（公開讀）
- */
 app.get('/api/itineraries/:id/like/list', async (req, res) => {
     try {
         const itineraryId = req.params.id;
@@ -487,14 +575,11 @@ app.get('/api/itineraries/:id/like/list', async (req, res) => {
     }
 });
 
+
 /* ========================
    NEW: Comments API (Firestore)
 ======================== */
-
-/**
- * 取得某個行程的所有留言（公開讀）
- * GET /api/itineraries/:id/comments
- */
+// ... (Comments API functions, no change) ...
 app.get('/api/itineraries/:id/comments', async (req, res) => {
     try {
         const itineraryId = req.params.id;
@@ -517,12 +602,6 @@ app.get('/api/itineraries/:id/comments', async (req, res) => {
         return res.status(500).send({ message: 'Failed to load comments' });
     }
 });
-
-/**
- * 新增留言（需登入；email 從 token）
- * POST /api/itineraries/:id/comments
- * body: { text: string }
- */
 app.post('/api/itineraries/:id/comments', verifyFirebaseToken, async (req, res) => {
     try {
         const itineraryId = req.params.id;
@@ -550,11 +629,6 @@ app.post('/api/itineraries/:id/comments', verifyFirebaseToken, async (req, res) 
         return res.status(500).send({ message: 'Failed to add comment' });
     }
 });
-
-/**
- * 刪除自己的留言（需登入；email 從 token）
- * DELETE /api/itineraries/:id/comments/:commentId
- */
 app.delete('/api/itineraries/:id/comments/:commentId', verifyFirebaseToken, async (req, res) => {
     try {
         const itineraryId = req.params.id;
@@ -588,6 +662,7 @@ app.delete('/api/itineraries/:id/comments/:commentId', verifyFirebaseToken, asyn
 /* ========================
    Travellers Ensure（需登入；第一次登入自動建）
 ======================== */
+// ... (Travellers Ensure, no change) ...
 app.post('/api/travellers/ensure', verifyFirebaseToken, async (req, res) => {
     const email = req.user?.email;
     const name = (req.body?.name || 'Anonymous').toString().slice(0, 100);
@@ -610,6 +685,7 @@ app.post('/api/travellers/ensure', verifyFirebaseToken, async (req, res) => {
 /* ========================
    Avatar 上傳（需登入；用 token 的 email 當檔名）
 ======================== */
+// ... (Avatar Upload, no change) ...
 app.post('/api/upload-avatar', verifyFirebaseToken, upload.single('avatar'), async (req, res) => {
     try {
         const email = req.user?.email; // 改用 token
@@ -644,7 +720,7 @@ app.post('/api/upload-avatar', verifyFirebaseToken, upload.single('avatar'), asy
         });
 
         // bucket 如果本身就是 public 可以不用，但保險一次
-        await gcFile.makePublic().catch(() => {});
+        await gcFile.makePublic().catch(() => { });
 
         return res.status(200).send({ message: 'Avatar uploaded.' });
     } catch (err) {
