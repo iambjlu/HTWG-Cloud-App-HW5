@@ -1,0 +1,1 @@
+This is your frontend folder. Terraform will write .env and .env.production here.
