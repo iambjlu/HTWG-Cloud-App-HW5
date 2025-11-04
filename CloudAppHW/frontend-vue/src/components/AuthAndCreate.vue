@@ -1,3 +1,4 @@
+<!--AuthAndCreate.vue-->
 <script setup>
 import { ref } from 'vue';
 import axios from 'axios';
@@ -21,7 +22,11 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['itinerary-updated', 'request-logout']);
+// <--
+// 1. FIX:
+// 告訴 Vue 我們新增了一個 'set-loading' 事件
+// -->
+const emit = defineEmits(['itinerary-updated', 'request-logout', 'set-loading']);
 
 // --- Auth 狀態 ---
 const authEmail = ref('');
@@ -41,49 +46,74 @@ const register = async () => {
     return;
   }
 
+  // <--
+  // 2. FIX:
+  // 在 "try" 之前，手動觸發 Spinner ON
+  // -->
+  emit('set-loading', true);
+
   try {
+    // 1. (Spinner 正在轉...)
     const cred = await createUserWithEmailAndPassword(auth, authEmail.value, authPassword.value);
+
+    // 2. (Spinner 正在轉...)
     if (authName.value) {
       await updateProfile(cred.user, { displayName: authName.value });
     }
 
-    // 註冊成功後，我們先登出 (因為 App.vue 會監聽登入狀態)
-    await signOut(auth);
+    // 3. (Spinner 正在轉...)
+    // 這個 call 會被 App.vue "攔截"
+    await axios.post(`${API_BASE_URL}/api/travellers/ensure`, {
+      name: authName.value || 'New User'
+    });
 
-    // 發射登出訊號 (讓 App.vue 清空狀態)
-    emit('request-logout');
+    // 4. (Axios 成功後，App.vue 攔截器會自動 'set-loading' to false)
 
-    authMessage.value = `Register Successfully！Please login.`;
+    authMessage.value = `Register & Login Successfully!`;
 
     // 清空輸入框
     authEmail.value = '';
     authPassword.value = '';
     authName.value = '';
 
-    // <-- FIX: 修正 Alert 和 location 順序 -->
-    // 必須先 alert，等 User 按下 "OK" 之後，才跳轉頁面
-    alert('Registration successful! Please log in with your new account.');
-    location.href='/'; // Redirect to home or login page
-    // <-- FIX ENDED -->
-
   } catch (err) {
     console.error(err);
     authMessage.value = err?.message || 'Register failed';
+
+    // <--
+    // 3. FIX:
+    // 如果 Firebase 或 Axios "失敗"，
+    // 攔截器可能沒跑到，所以我們要手動關閉 Spinner
+    // -->
+    emit('set-loading', false);
   }
 };
 
-// Firebase 登入
+// ---
+// 登入 (login) function 也要加一樣的邏輯
+// ---
 const login = async () => {
   authMessage.value = '';
+
+  // <-- 1. 手動 ON -->
+  emit('set-loading', true);
   try {
+    // 2. (Spinner 正在轉...)
     const cred = await signInWithEmailAndPassword(auth, authEmail.value, authPassword.value);
 
-    // (App.vue 的 onAuthStateChanged 會接手後續動作)
+    // 3. 登入後，我們也 call 'ensure'
+    // 這會 "自動" 關閉 spinner
+    await axios.post(`${API_BASE_URL}/api/travellers/ensure`, {
+      name: cred.user.displayName || 'Logged In User'
+    });
 
     authMessage.value = `Login Successfully！User Email: ${cred.user.email}`;
+
   } catch (err) {
     console.error(err);
     authMessage.value = err?.message || 'Login failed';
+    // <-- 3. 失敗時手動 OFF -->
+    emit('set-loading', false);
   }
 };
 
@@ -136,13 +166,13 @@ const createItinerary = async () => {
     createTitle.value = createDestination.value = createStartDate.value = createEndDate.value = createShortDesc.value = createDetailDesc.value = '';
 
     emit('itinerary-updated');
-
+    console.log('Trip created: ', response.data);
     // Call the AI suggestion alert
-    if (response.data && response.data.suggestion) {
-      setTimeout(() => {
-        alert(response.data.suggestion);
-      }, 100);
-    }
+    // if (response.data && response.data.suggestion) {
+    //   setTimeout(() => {
+    //     alert("Your trip has been successfully uploaded!\n"+response.data.suggestion);
+    //   }, 100);
+    // }
 
   } catch (error) {
     console.error('Error creating trip: ', error);
@@ -254,7 +284,13 @@ const createItinerary = async () => {
         </button>
       </form>
       <p class="text-sm font-medium text-gray-700">
+        Note:
+      </p>
+      <p class="text-sm font-medium text-gray-700">
         With Creating this trip, everyone on DragonFlyX can see it.
+      </p>
+      <p class="text-sm font-medium text-gray-700">
+        Google Gemini will make a suggestion for your trip like magic!
       </p>
       <p :class="{'text-green-600': createMessage.includes('Successfully'), 'text-red-600': !createMessage.includes('Successfully')}" class="mt-3 text-sm font-medium">
         {{ createMessage }}

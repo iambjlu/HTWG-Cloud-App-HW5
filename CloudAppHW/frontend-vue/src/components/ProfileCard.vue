@@ -1,4 +1,3 @@
-<!--ProfileCard.vue-->
 <script setup>
 import { ref, watch, onMounted } from 'vue'
 import axios from 'axios'
@@ -70,7 +69,7 @@ async function handleFileChange(e) {
   }
 
   try {
-    alert('Uploading your avatar...Please wait.')
+
     // 壓縮到 200x200, 品質 0.85
     const blob = await resizeToJpegBlob(file, 200, 200, 0.85)
 
@@ -208,11 +207,11 @@ function resizeToJpegBlob(file, targetW, targetH, quality = 0.85) {
     <p class="text-sm text-gray-500 mt-2">user</p>
     <p class="text-lg font-semibold text-gray-800 break-all">{{ userEmail }}</p>
 
-<!--    <p-->
-<!--        v-if="userEmail === currentUserEmail"-->
-<!--        class="text-[11px] text-indigo-500 mt-2"-->
-<!--    >-->
-<!--      Click avatar to upload JPG-->
-<!--    </p>-->
+    <!--    <p-->
+    <!--        v-if="userEmail === currentUserEmail"-->
+    <!--        class="text-[11px] text-indigo-500 mt-2"-->
+    <!--    >-->
+    <!--      Click avatar to upload JPG-->
+    <!--    </p>-->
   </div>
 </template>

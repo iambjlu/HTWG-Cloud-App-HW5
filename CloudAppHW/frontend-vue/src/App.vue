@@ -1,3 +1,4 @@
+<!--App.vue-->
 <script setup>
 // --- 這整個 SCRIPT 區塊完全沒動 ---
 import {ref, computed, onMounted, watch} from 'vue';
@@ -111,10 +112,17 @@ onMounted(() => {
       userEmail.value = user.email || null;
       await applyAuthHeader(user);
 
-      // <--
-      // 🚨 提醒：你這版的 Code 還是少了 /ensure call
-      // (我先不加，但記得你新註冊的使用者會無法建立行程)
-      // -->
+// <-- 把它加回來 -->
+      try {
+        await axios.post(`${import.meta.env.VITE_API_BASE_URL}/api/travellers/ensure`, {
+          name: user.displayName || 'New User'
+        });
+      } catch (err) {
+        console.error("Failed to ensure user in DB:", err);
+      }
+      // <-- FIX ENDED -->
+
+      localStorage.setItem('tripplanner_userEmail', userEmail.value || '');
 
       localStorage.setItem('tripplanner_userEmail', userEmail.value || '');
     } else {
@@ -155,6 +163,10 @@ watch(isLoading, (newValue) => {
 </script>
 
 <template>
+  <div class="loading-overlay" v-if="isLoading">
+    <div class="loading-box">
+
+
   <div v-if="isLoading" class="loading-overlay">
     <div class="cupertino-spinner">
       <div></div>
@@ -167,7 +179,8 @@ watch(isLoading, (newValue) => {
       <div></div>
     </div>
   </div>
-
+</div>
+  </div>
   <div class="min-h-screen bg-gray-100">
     <header v-if="!isLoading"
             class="bg-indigo-600 text-white
@@ -220,7 +233,7 @@ watch(isLoading, (newValue) => {
               <p><strong>Professor:</strong> Dr. Markus Eilsperger</p>
             </div>
           </div>
-          <AuthAndCreate/>
+          <AuthAndCreate @set-loading="isLoading = $event"/>
         </div>
       </div>
       <template v-else>
@@ -235,11 +248,16 @@ watch(isLoading, (newValue) => {
               <p><strong>Professor:</strong> Dr. Markus Eilsperger</p>
             </div>
           </div>
+          <ProfileCard
+              :userEmail="effectiveEmail"
+              :currentUserEmail="userEmail"
+          />
           <AuthAndCreate
               v-if="!isViewingSomeoneElse"
               :userEmail="userEmail"
               :isAuthenticated="isAuthenticated"
               @itinerary-updated="handleItineraryUpdate"
+              @set-loading="isLoading = $event"
           />
           <div
               v-else
@@ -256,11 +274,7 @@ watch(isLoading, (newValue) => {
             </button>
           </div>
         </div>
-        <div class="lg:col-span-7 space-y-4">
-          <ProfileCard
-              :userEmail="effectiveEmail"
-              :currentUserEmail="userEmail"
-          />
+        <div class="lg:col-span-7 space-y-3">
           <ItineraryManager
               :travellerEmail="effectiveEmail"
               :currentUserEmail="userEmail"
@@ -288,14 +302,22 @@ html.is-loading {
 .loading-overlay {
   position: fixed;
   inset: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   z-index: 9998;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: wait;
+  pointer-events: none; /* 防止擋到背景操作（可選） */
+}
+
+/* 中間毛玻璃區塊 */
+.loading-box {
+  background-color: rgba(0,0,0, 0.5);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(5px);
+  border-radius: 20px;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+  padding: 5rem 5rem;
+  pointer-events: all; /* 如果裡面有 spinner 或文字，讓它能互動 */
 }
 
 

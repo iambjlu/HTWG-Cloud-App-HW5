@@ -2,8 +2,61 @@
 <script setup>
 import { ref, onMounted, watch, computed } from 'vue';
 import axios from 'axios';
-
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
+// --- AI Suggestion (Firestore polling) ---
+const aiStatus = ref('idle'); // idle | queued | ok | no_suggestion | error
+const aiPollTimer = ref(null);
+const aiLastFetchAt = ref(0);
+
+function clearAiTimer() {
+  if (aiPollTimer.value) {
+    clearInterval(aiPollTimer.value);
+    aiPollTimer.value = null;
+  }
+}
+
+/** 讀一次 Firestore 裡的 AI 記錄（aiSuggestions/{id}） */
+async function fetchAiSuggestionOnce(itineraryId) {
+  try {
+    const res = await axios.get(`${API_BASE_URL}/api/itineraries/${itineraryId}/ai`);
+    const data = res.data || {};
+    aiStatus.value = data.status || 'no_suggestion';
+    // 寫回畫面用的欄位（你的 template 已經用 selectedItinerary.aiSuggestion）
+    if (selectedItinerary.value && String(selectedItinerary.value.id) === String(itineraryId)) {
+      selectedItinerary.value.aiSuggestion = data.suggestion || '';
+    }
+    aiLastFetchAt.value = Date.now();
+    return { found: true, terminal: ['ok', 'no_suggestion', 'error'].includes(aiStatus.value) };
+  } catch (err) {
+    // 404 代表還沒寫入 → 當作 queued
+    if (err?.response?.status === 404) {
+      aiStatus.value = 'queued';
+      return { found: false, terminal: false };
+    }
+    console.error('[AI] fetch error:', err?.message || err);
+    aiStatus.value = 'error';
+    return { found: false, terminal: true };
+  }
+}
+
+/** 開始輪詢，直到拿到終局狀態 */
+async function startAiPolling(itineraryId, { intervalMs = 2000, maxTries = 8 } = {}) {
+  clearAiTimer();
+  aiStatus.value = 'queued';
+  // 先打一次
+  let tries = 0;
+  const first = await fetchAiSuggestionOnce(itineraryId);
+  if (first.terminal) return;
+
+  aiPollTimer.value = setInterval(async () => {
+    tries++;
+    const r = await fetchAiSuggestionOnce(itineraryId);
+    if (r.terminal || tries >= maxTries) {
+      clearAiTimer();
+    }
+  }, intervalMs);
+}
 
 const props = defineProps({
   travellerEmail: {
@@ -230,16 +283,22 @@ async function viewDetails(id) {
     }
 
     selectedItinerary.value = data;
+    // 先清空舊的 AI 結果與狀態，避免顯示到上一次的內容
+    selectedItinerary.value.aiSuggestion = '';
+    aiStatus.value = 'idle';
+
     editForm.value = { ...data };
 
     await loadLikeInfo(id);
     await loadComments(id);
 
+    // 🔔 啟動 AI 輪詢（讀 aiSuggestions/{id}）
+    startAiPolling(id);
+
   } catch (e) {
     error.value = 'Unable to load trip detail.';
   }
 }
-
 /* ---------------- 編輯 / 儲存 / 刪除 ---------------- */
 function startEdit() { isEditing.value = true; }
 function cancelEdit() { isEditing.value = false; editForm.value = { ...selectedItinerary.value }; }
@@ -562,7 +621,7 @@ async function deleteComment(commentId, commentEmail) {
 
     <!-- DETAIL -->
     <div
-        class="bg-white p-6 rounded-xl shadow-lg border border-gray-200 overflow-y-auto max-h-[80vh]"
+        class="bg-white p-6 rounded-xl shadow-lg border border-gray-200 overflow-y-auto max-h-[90vh]"
     >
       <h2 v-if="!selectedItinerary" class="text-xl font-semibold text-gray-400">
         Select a trip to view details
@@ -598,7 +657,38 @@ async function deleteComment(commentId, commentEmail) {
             <p class="whitespace-pre-wrap text-gray-700 mt-2">
               {{ selectedItinerary.detail_description }}
             </p>
+            <!-- AI Suggestion block -->
+            <div v-if="selectedItinerary.aiSuggestion" class="mt-6 border-t pt-4">
+              <h2 class="text-3xl font-semibold mb-2 bg-[linear-gradient(90deg,_#0A84FF_0%,_#5E5CE6_20%,_#BF5AF2_40%,_#FF2D55_60%,_#FF6961_75%,_#FF9F0A_100%)] bg-clip-text text-transparent">
+                Gemini AI Travel Suggestion
+              </h2>
+              <!-- AI Suggestion status badge -->
+              <div class="mt-4 text-center">
+  <span
+      v-if="aiStatus !== 'idle'&&aiStatus !== 'ok'"
+      class="inline-block text-xs px-2 py-0.5 mb-2 rounded border"
+      :class="{
+      'bg-yellow-50 text-yellow-700 border-yellow-200': aiStatus === 'queued',
+      'bg-green-50 text-green-700 border-green-200': aiStatus === 'ok',
+      'bg-gray-50 text-gray-700 border-gray-200': aiStatus === 'no_suggestion',
+      'bg-red-50 text-red-700 border-red-200': aiStatus === 'error'
+    }"
+  >
+    Status: ● {{ aiStatus.toUpperCase() }}
+
+  </span>
+              </div>
+              <div
+                  class="text-gray-700 text-sm bg-gray-100 p-3 rounded-md whitespace-pre-wrap leading-relaxed font-sans text-left border"
+              >
+                {{ selectedItinerary.aiSuggestion }}
+              </div>
+            </div>
+            <!--              disclaimer-->
+            <span class="text-xs text-gray-500 text-center">Gemini can make mistakes, double-check it. AI Suggestion is not optimised for edited content.</span>
           </div>
+
+
 
           <!-- ❤️ Like block (detail view uses same refs/maps) -->
           <div class="mt-4 flex flex-col items-center space-y-3">
