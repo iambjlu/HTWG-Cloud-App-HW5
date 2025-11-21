@@ -1,0 +1,122 @@
+DragonFlyX安裝流程
+
+1. Create a VM instance and get it’s IP address
+
+2. Connect into it with ssh and paste these
+mkdir PhpStormProjects
+cd PhpStormProjects
+sudo apt update -y
+sudo apt-get remove -y nodejs npm
+sudo apt-get autoremove -y
+sudo apt-get update
+sudo apt install -y ca-certificates curl gnupg unzip 
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+NODE_MAJOR=22
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
+sudo apt update -y
+sudo apt install -y nodejs
+sudo apt install -y npm
+sudo apt install -y mysql-server
+sudo apt install -y mysql-client-core-8.0
+node -v
+npm -v
+wget -O CloudAppHW5.zip https://github.com/iambjlu/HTWG-Cloud-App-Dev-HW5/releases/download/1141104/CloudAppHW5.zip
+ && unzip -o CloudAppHW5.zip -d CloudAppHW && rm CloudAppHW5.zip
+sudo systemctl start mysql
+sudo systemctl status mysql
+sudo mysql
+
+3. Paste these
+CREATE DATABASE travel_app_db;
+CREATE USER 'cloudapp_user'@'localhost' IDENTIFIED BY 'mypassword';
+GRANT ALL PRIVILEGES ON travel_app_db.* TO 'cloudapp_user'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+
+4. Login to MySQL
+mysql -u cloudapp_user -p
+Enter Password
+mypassword
+
+
+5. Paste these
+USE travel_app_db;
+CREATE TABLE travellers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL
+);
+CREATE TABLE itineraries (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    traveller_id INT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    destination VARCHAR(255) NOT NULL,
+    start_date DATE NOT NULL,
+    short_description VARCHAR(80) NOT NULL,
+    detail_description TEXT,
+    FOREIGN KEY (traveller_id) REFERENCES travellers(id),
+    end_date DATE NOT NULL
+);
+EXIT;
+
+6. Edit ~/PhpStormProjects/CloudAppHW/frontend-vue/.env
+	and backend in the end of this note
+nano /home/ubuntu/PhpStormProjects/CloudAppHW/frontend-vue/.env
+7. Enter  API IP and port like this
+VITE_API_BASE_URL=http://10.211.55.5:3000
+or Enter API CloudFront Origin or something just like this
+VITE_API_BASE_URL=https://xxxxxxxxxxx.cloudfront.net
+
+8. Install packages
+cd ~/PhpStormProjects/CloudAppHW/backend-api
+npm install express mysql2 cors dotenv
+npm install undici
+npm install multer
+npm install @google/generative-ai@latest firebase-admin@latest @google-cloud/storage@latest
+
+cd ~/PhpStormProjects/CloudAppHW/frontend-vue
+npm install axios
+npm install firebase
+
+9. Run server as sudo su
+sudo su
+
+10. Then paste
+nohup bash -c 'cd /home/ubuntu/PhpStormProjects/CloudAppHW/backend-api ; node server.js' >/tmp/backend.log 2>&1 &
+
+nohup bash -c 'cd /home/ubuntu/PhpStormProjects/CloudAppHW/frontend-vue ; npm run dev -- --host 0.0.0.0' >/tmp/frontend.log 2>&1 &
+sudo systemctl start mysql;sudo systemctl status mysql
+
+
+----------
+
+Content in ./CloudAppHW/backend-api/.env
+```
+# GCP Setting
+GCP_SERVICE_ACCOUNT_JSON={  "type": "service_account",  "project_id": "htwg-cloudapp-hw",  "private_key_id": "xxxxxxxxxxx",  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIxxxxxxxLII\n-----END PRIVATE KEY-----\n",  "client_email": "xxx",  "client_id": "xxx",  "auth_uri": "https://accounts.google.com/o/oauth2/auth",  "token_uri": "xxx",  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",  "client_x509_cert_url": "xxx",  "universe_domain": "googleapis.com"}
+
+GEMINI_API_KEY=xxxx
+GCP_BUCKET_NAME=htwg-cloudapp-hw.firebasestorage.app
+
+
+# DB Setting
+DB_HOST=localhost           #DB URL
+DB_USER=cloudapp_user       # usename
+DB_PASSWORD=mypassword      # password
+DB_NAME=travel_app_db
+
+# Server Setting
+PORT=3000
+```
+
+Content in ./CloudAppHW/frontend-vue/.env
+```
+VITE_API_BASE_URL=http://192.168.183.140:3000                      #backend url
+
+VITE_FIREBASE_API_KEY=AIxxxxxc                                     #firebase api key
+VITE_FIREBASE_AUTH_DOMAIN=htwg-cloudapp-hw.firebaseapp.com         #firebase auth domain
+VITE_FIREBASE_PROJECT_ID=htwg-cloudapp-hw                          #firebase project id    
+VITE_FIREBASE_APP_ID=xxxxx                                         #firebase app id
+VITE_FIREBASE_STORAGE_BUCKET=htwg-cloudapp-hw.firebasestorage.app  #firebase storage bucket
+VITE_MEASUREMENTID=G-Z5BGREZS4R                                    #measurement id
+```
